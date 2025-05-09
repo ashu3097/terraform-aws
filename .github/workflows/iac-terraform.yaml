@@ -10,11 +10,7 @@ on:
   push:
     branches:
       - main # Triggers the workflow on push events to the 'main' branch.
-  # You can also add other triggers, for example:
-  # pull_request:
-  #   branches:
-  #     - main
-  workflow_dispatch: {} # Allows manual triggering of the workflow
+  workflow_dispatch: {} # Allows manual triggering of the workflow from the Actions tab
 
 # A workflow run is made up of one or more jobs that can run sequentially or in parallel.
 jobs:
@@ -30,11 +26,11 @@ jobs:
 
     # Environment variables available to all steps in this job.
     env:
-      AWS_REGION: "ap-south-1" # Specify your desired AWS region
+      AWS_REGION: "us-east-1" # Specify your desired AWS region
       TF_WORKSPACE: "dev"       # Specify your Terraform workspace name
       TF_VAR_FILE: "dev.tfvars" # Specify your Terraform variables file
       # TF_LOG: "DEBUG" # Uncomment for verbose Terraform logging if needed
-      TERRAFORM_WORKING_DIR: "./infra" # Uncomment and set if your Terraform files are in a subdirectory
+      TERRAFORM_WORKING_DIR: "./infra" # Set this to your Terraform code directory e.g. "./terraform", or remove if root.
 
     # Steps represent a sequence of tasks that will be executed as part of the job.
     steps:
@@ -50,7 +46,7 @@ jobs:
         with:
           # The ARN of the IAM role to assume.
           # This role must be configured in your AWS account to trust the GitHub OIDC provider.
-          # Store this as a GitHub secret for security.
+          # Store this as a GitHub secret for security: AWS_OIDC_ROLE_ARN
           role-to-assume: ${{ secrets.AWS_OIDC_ROLE_ARN }}
           # role-session-name: GitHubActionsTerraformSession # Optional: customize the session name
           aws-region: ${{ env.AWS_REGION }} # Uses the AWS_REGION environment variable defined above.
@@ -61,50 +57,72 @@ jobs:
         uses: hashicorp/setup-terraform@v3
         with:
           terraform_version: "1.5.0" # Specify your desired Terraform version.
-          # terraform_wrapper: true # Set to true if you are using terraform_wrapper
+          # terraform_wrapper: true # Default is true. Set to false to skip installing the wrapper.
+                                   # The wrapper helps inject TF_WORKSPACE.
 
       # Step 4: Terraform Init
       # Initializes a new or existing Terraform working directory.
       - name: Terraform Init
         id: init
         run: terraform init
-        working-directory: ${{ env.TERRAFORM_WORKING_DIR }} # Set working directory if needed
+        working-directory: ${{ env.TERRAFORM_WORKING_DIR }}
 
-      # Step 5: Terraform Workspace
-      # Selects or creates the specified Terraform workspace.
-      - name: Terraform Workspace
+      # Step 5: Ensure Terraform Workspace Exists
+      # Ensures the Terraform workspace specified by TF_WORKSPACE exists.
+      # The TF_WORKSPACE environment variable handles the actual selection for subsequent commands.
+      - name: Ensure Terraform Workspace Exists
         id: workspace
         run: |
-          terraform workspace select ${{ env.TF_WORKSPACE }} || terraform workspace new ${{ env.TF_WORKSPACE }}
-        working-directory: ${{ env.TERRAFORM_WORKING_DIR }} # Set working directory if needed
+          set -e # Exit immediately if a command exits with a non-zero status.
+          echo "Ensuring workspace '${TF_WORKSPACE}' (defined by TF_WORKSPACE env var) exists..."
+          # Check if the workspace already exists by listing workspaces.
+          # The grep pattern looks for an exact match of the workspace name,
+          # optionally preceded by '*' (which indicates the current workspace in the list output).
+          if ! terraform workspace list | grep -Eq "^(\* )?${TF_WORKSPACE}$"; then
+            echo "Workspace '${TF_WORKSPACE}' not found in list. Attempting to create it."
+            terraform workspace new "${TF_WORKSPACE}"
+            echo "Workspace '${TF_WORKSPACE}' created."
+          else
+            echo "Workspace '${TF_WORKSPACE}' already exists."
+          fi
+        working-directory: ${{ env.TERRAFORM_WORKING_DIR }}
 
       # Step 6: Terraform Validate
       # Validates the Terraform configuration files.
       - name: Terraform Validate
         id: validate
         run: terraform validate -no-color
-        working-directory: ${{ env.TERRAFORM_WORKING_DIR }} # Set working directory if needed
+        working-directory: ${{ env.TERRAFORM_WORKING_DIR }}
 
       # Step 7: Terraform Plan
       # Creates an execution plan using the specified .tfvars file.
       - name: Terraform Plan
         id: plan
         run: terraform plan -no-color -input=false -var-file="${{ env.TF_VAR_FILE }}" -out=tfplan
-        working-directory: ${{ env.TERRAFORM_WORKING_DIR }} # Set working directory if needed
+        working-directory: ${{ env.TERRAFORM_WORKING_DIR }}
         # For pull requests, you might want to stop here or add a step to comment the plan on the PR.
 
       # Step 8: Terraform Apply
       # Applies the changes using the specified .tfvars file.
-      # This step will only run on pushes to the 'main' branch.
+      # This step will only run on pushes to the 'main' branch OR if manually triggered.
       - name: Terraform Apply
-        # if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+        if: (github.ref == 'refs/heads/main' && github.event_name == 'push') || (github.event_name == 'workflow_dispatch')
         run: terraform apply -auto-approve -input=false -var-file="${{ env.TF_VAR_FILE }}" tfplan
-        working-directory: ${{ env.TERRAFORM_WORKING_DIR }} # Set working directory if needed
+        working-directory: ${{ env.TERRAFORM_WORKING_DIR }}
 
       # Optional: Add a step for Terraform Destroy if needed, but be very careful with this.
       # - name: Terraform Destroy
-      #   if: github.event_name == 'workflow_dispatch' && inputs.destroy == 'true' # Example: manual trigger with input
+      #   if: github.event_name == 'workflow_dispatch' # Example: only allow destroy on manual trigger
+      #   # You might want to add inputs to workflow_dispatch to confirm destroy action
+      #   # on:
+      #   #   workflow_dispatch:
+      #   #     inputs:
+      #   #       confirm_destroy:
+      #   #         description: 'Type "destroy" to confirm'
+      #   #         required: true
+      #   #         default: 'no'
+      #   # if: github.event_name == 'workflow_dispatch' && github.event.inputs.confirm_destroy == 'destroy'
       #   run: |
-      #     terraform workspace select ${{ env.TF_WORKSPACE }}
+      #     # TF_WORKSPACE already selects the workspace
       #     terraform destroy -auto-approve -var-file="${{ env.TF_VAR_FILE }}"
       #   working-directory: ${{ env.TERRAFORM_WORKING_DIR }}
