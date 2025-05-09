@@ -1,6 +1,3 @@
-# main.tf
-# This file defines the AWS S3 bucket resource.
-
 resource "aws_s3_bucket" "this" {
   bucket = var.bucket_name
 
@@ -12,14 +9,28 @@ resource "aws_s3_bucket" "this" {
   )
 }
 
+# Manages S3 bucket ownership controls.
+# By default, ACLs are disabled (BucketOwnerEnforced), which is the recommended setting.
+resource "aws_s3_bucket_ownership_controls" "this" {
+  bucket = aws_s3_bucket.this.id
+  rule {
+    object_ownership = var.object_ownership
+  }
+}
+
+# Manages S3 bucket ACLs.
+# This resource is only created if an 'acl' is specified AND object_ownership is not 'BucketOwnerEnforced'.
 resource "aws_s3_bucket_acl" "this" {
-  count  = var.acl != null ? 1 : 0
+  count = var.acl != null && var.object_ownership != "BucketOwnerEnforced" ? 1 : 0
+
   bucket = aws_s3_bucket.this.id
   acl    = var.acl
+
+  depends_on = [aws_s3_bucket_ownership_controls.this] # Ensure ownership is set before ACL
 }
 
 resource "aws_s3_bucket_versioning" "this" {
-  count  = var.enable_versioning != null ? 1 : 0
+  count  = var.enable_versioning != null ? 1 : 0 # Keep this count logic if var.enable_versioning can be null
   bucket = aws_s3_bucket.this.id
   versioning_configuration {
     status = var.enable_versioning ? "Enabled" : "Disabled"
@@ -39,7 +50,9 @@ resource "aws_s3_bucket_server_side_encryption_configuration" "this" {
 }
 
 resource "aws_s3_bucket_public_access_block" "this" {
-  count  = var.block_public_access != null ? 1 : 0
+  # This resource can always be created, as its defaults are restrictive.
+  # If var.block_public_access is null, it might cause issues if the object type is expected.
+  # Assuming var.block_public_access is an object with optional attributes as defined.
   bucket = aws_s3_bucket.this.id
 
   block_public_acls       = lookup(var.block_public_access, "block_public_acls", true)
@@ -68,10 +81,13 @@ resource "aws_s3_bucket_lifecycle_configuration" "this" {
       id     = rule.value.id
       status = lookup(rule.value, "enabled", true) ? "Enabled" : "Disabled"
 
+      # Filter block: A filter must be present.
+      # 'prefix' defaults to "" (empty string) via variable definition, applying to all objects if not specified.
       filter {
-        prefix = lookup(rule.value, "prefix", null)
-        # Terraform 0.12 doesn't allow dynamic blocks with for_each inside another dynamic block directly for tags.
-        # If specific tag filtering is needed, it's better to define multiple rule blocks or use a more complex structure.
+        prefix = rule.value.prefix
+        # If you want to support tag-based filtering or 'and' operator:
+        # dynamic "and" { ... }
+        # dynamic "tag" { ... }
       }
 
       dynamic "transition" {
@@ -121,6 +137,8 @@ resource "aws_s3_bucket_policy" "this" {
   count  = var.bucket_policy != null ? 1 : 0
   bucket = aws_s3_bucket.this.id
   policy = var.bucket_policy
+
+  depends_on = [aws_s3_bucket_ownership_controls.this, aws_s3_bucket_public_access_block.this]
 }
 
 resource "aws_s3_bucket_cors_configuration" "this" {
@@ -161,7 +179,7 @@ resource "aws_s3_bucket_object_lock_configuration" "this" {
 
   bucket = aws_s3_bucket.this.id
 
-  object_lock_enabled = "Enabled"
+  object_lock_enabled = "Enabled" # This requires versioning to be enabled on the bucket
 
   rule {
     default_retention {

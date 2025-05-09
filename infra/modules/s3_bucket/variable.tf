@@ -1,3 +1,6 @@
+ variables.tf (in ./modules/s3-bucket/)
+# This file defines the input variables for the S3 bucket module.
+
 variable "bucket_name" {
   description = "The name of the S3 bucket. Must be globally unique."
   type        = string
@@ -9,20 +12,30 @@ variable "tags" {
   default     = {}
 }
 
-variable "acl" {
-  description = "The canned ACL to apply to the bucket. Valid values: private, public-read, public-read-write, aws-exec-read, authenticated-read, log-delivery-write."
+variable "object_ownership" {
+  description = "Specifies the S3 Object Ownership control. Valid values: 'BucketOwnerPreferred', 'ObjectWriter', 'BucketOwnerEnforced'. 'BucketOwnerEnforced' (default) disables ACLs."
   type        = string
-  default     = "private" # Recommended default
+  default     = "BucketOwnerEnforced"
+  validation {
+    condition     = contains(["BucketOwnerPreferred", "ObjectWriter", "BucketOwnerEnforced"], var.object_ownership)
+    error_message = "Invalid object_ownership value. Must be one of: BucketOwnerPreferred, ObjectWriter, BucketOwnerEnforced."
+  }
+}
+
+variable "acl" {
+  description = "The canned ACL to apply to the bucket. Ignored if object_ownership is 'BucketOwnerEnforced'. Valid values: private, public-read, public-read-write, aws-exec-read, authenticated-read, log-delivery-write."
+  type        = string
+  default     = null # ACLs are not applied by default.
   validation {
     condition     = var.acl == null || contains(["private", "public-read", "public-read-write", "aws-exec-read", "authenticated-read", "log-delivery-write"], var.acl)
-    error_message = "Invalid ACL value. Must be one of: private, public-read, public-read-write, aws-exec-read, authenticated-read, log-delivery-write."
+    error_message = "Invalid ACL value. Must be one of: private, public-read, public-read-write, aws-exec-read, authenticated-read, log-delivery-write, or null."
   }
 }
 
 variable "enable_versioning" {
-  description = "A boolean that indicates if versioning should be enabled for the S3 bucket."
+  description = "A boolean that indicates if versioning should be enabled for the S3 bucket. Can be null to not manage versioning."
   type        = bool
-  default     = true
+  default     = true # Defaulting to true as it's a common best practice.
 }
 
 variable "enable_server_side_encryption" {
@@ -55,7 +68,7 @@ variable "block_public_access" {
     ignore_public_acls      = optional(bool, true)
     restrict_public_buckets = optional(bool, true)
   })
-  default = {
+  default = { # These are the AWS recommended defaults for new buckets
     block_public_acls       = true
     block_public_policy     = true
     ignore_public_acls      = true
@@ -77,8 +90,9 @@ variable "lifecycle_rules" {
   type = list(object({
     id      = string
     enabled = optional(bool, true)
-    prefix  = optional(string)
-    tags    = optional(map(string)) # Note: direct tag filtering in dynamic blocks can be tricky.
+    # Prefix defaults to "" (empty string) if not provided, meaning the rule applies to all objects.
+    prefix  = optional(string, "") 
+    # tags    = optional(map(string)) # For tag-based filtering, uncomment and adjust main.tf filter block
 
     transitions = optional(list(object({
       days          = optional(number)
@@ -109,7 +123,7 @@ variable "lifecycle_rules" {
 }
 
 variable "bucket_policy" {
-  description = "A valid bucket policy JSON document. Note: Ensure this policy does not conflict with block_public_access settings."
+  description = "A valid bucket policy JSON document. Note: Ensure this policy does not conflict with block_public_access or object_ownership settings."
   type        = string
   default     = null
 }
@@ -146,6 +160,4 @@ variable "object_lock_configuration" {
     })
   })
   default = null # Object lock is disabled by default
-  # Validation: If object_lock_configuration is set, enable_versioning must be true.
-  # This validation is implicitly handled by the depends_on in the resource.
 }
