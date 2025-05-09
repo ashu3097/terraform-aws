@@ -96,6 +96,7 @@ jobs:
 
       # Step 7: Terraform Plan
       # Creates an execution plan using the specified .tfvars file.
+      # The variables from TF_VAR_FILE are baked into the tfplan file.
       - name: Terraform Plan
         id: plan
         run: terraform plan -no-color -input=false -var-file="${{ env.TF_VAR_FILE }}" -out=tfplan
@@ -103,14 +104,16 @@ jobs:
         # For pull requests, you might want to stop here or add a step to comment the plan on the PR.
 
       # Step 8: Terraform Apply
-      # Applies the changes using the specified .tfvars file.
+      # Applies the changes using the saved plan file (tfplan).
+      # The -var-file option is NOT needed here because variables were included in the plan.
       # This step will only run on pushes to the 'main' branch OR if manually triggered.
       - name: Terraform Apply
         if: (github.ref == 'refs/heads/main' && github.event_name == 'push') || (github.event_name == 'workflow_dispatch')
-        run: terraform apply -auto-approve -input=false -var-file="${{ env.TF_VAR_FILE }}" tfplan
+        run: terraform apply -auto-approve -input=false tfplan
         working-directory: ${{ env.TERRAFORM_WORKING_DIR }}
 
       # Optional: Add a step for Terraform Destroy if needed, but be very careful with this.
+      # Note: For destroy, you would typically pass the -var-file again if not using a plan.
       # - name: Terraform Destroy
       #   if: github.event_name == 'workflow_dispatch' # Example: only allow destroy on manual trigger
       #   # You might want to add inputs to workflow_dispatch to confirm destroy action
