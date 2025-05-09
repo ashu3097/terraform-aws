@@ -1,5 +1,4 @@
- variables.tf (in ./modules/s3-bucket/)
-# This file defines the input variables for the S3 bucket module.
+
 
 variable "bucket_name" {
   description = "The name of the S3 bucket. Must be globally unique."
