@@ -1,0 +1,110 @@
+# This is a GitHub Actions workflow file that defines a CI/CD pipeline
+# for deploying AWS resources using Terraform, authenticating via OIDC,
+# and utilizing Terraform workspaces and .tfvars files.
+
+# Name of the workflow, which will be displayed in the GitHub Actions UI.
+name: 'Terraform Deploy to AWS with OIDC & Workspaces'
+
+# Controls when the workflow will run.
+on:
+  push:
+    branches:
+      - main # Triggers the workflow on push events to the 'main' branch.
+  # You can also add other triggers, for example:
+  # pull_request:
+  #   branches:
+  #     - main
+  workflow_dispatch: {} # Allows manual triggering of the workflow
+
+# A workflow run is made up of one or more jobs that can run sequentially or in parallel.
+jobs:
+  # Defines a job named 'terraform'.
+  terraform:
+    # The type of runner that the job will run on.
+    runs-on: ubuntu-latest
+    # Permissions needed for the OIDC token.
+    permissions:
+      id-token: write # Required to fetch the OIDC token.
+      contents: read  # Required to checkout the repository.
+      pull-requests: write # Optional: For adding comments to PRs with plan output.
+
+    # Environment variables available to all steps in this job.
+    env:
+      AWS_REGION: "ap-south-1" # Specify your desired AWS region
+      TF_WORKSPACE: "dev"       # Specify your Terraform workspace name
+      TF_VAR_FILE: "dev.tfvars" # Specify your Terraform variables file
+      # TF_LOG: "DEBUG" # Uncomment for verbose Terraform logging if needed
+      TERRAFORM_WORKING_DIR: "./infra" # Uncomment and set if your Terraform files are in a subdirectory
+
+    # Steps represent a sequence of tasks that will be executed as part of the job.
+    steps:
+      # Step 1: Checkout code
+      # This action checks-out your repository under $GITHUB_WORKSPACE, so your workflow can access it.
+      - name: Checkout code
+        uses: actions/checkout@v4 # Uses the official 'checkout' action.
+
+      # Step 2: Configure AWS Credentials using OIDC
+      # This action exchanges a GitHub OIDC token for temporary AWS credentials.
+      - name: Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          # The ARN of the IAM role to assume.
+          # This role must be configured in your AWS account to trust the GitHub OIDC provider.
+          # Store this as a GitHub secret for security.
+          role-to-assume: ${{ secrets.AWS_OIDC_ROLE_ARN }}
+          # role-session-name: GitHubActionsTerraformSession # Optional: customize the session name
+          aws-region: ${{ env.AWS_REGION }} # Uses the AWS_REGION environment variable defined above.
+
+      # Step 3: Setup Terraform
+      # This action sets up Terraform CLI in your GitHub Actions runner.
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: "1.5.0" # Specify your desired Terraform version.
+          # terraform_wrapper: true # Set to true if you are using terraform_wrapper
+
+      # Step 4: Terraform Init
+      # Initializes a new or existing Terraform working directory.
+      - name: Terraform Init
+        id: init
+        run: terraform init
+        working-directory: ${{ env.TERRAFORM_WORKING_DIR }} # Set working directory if needed
+
+      # Step 5: Terraform Workspace
+      # Selects or creates the specified Terraform workspace.
+      - name: Terraform Workspace
+        id: workspace
+        run: |
+          terraform workspace select ${{ env.TF_WORKSPACE }} || terraform workspace new ${{ env.TF_WORKSPACE }}
+        working-directory: ${{ env.TERRAFORM_WORKING_DIR }} # Set working directory if needed
+
+      # Step 6: Terraform Validate
+      # Validates the Terraform configuration files.
+      - name: Terraform Validate
+        id: validate
+        run: terraform validate -no-color
+        working-directory: ${{ env.TERRAFORM_WORKING_DIR }} # Set working directory if needed
+
+      # Step 7: Terraform Plan
+      # Creates an execution plan using the specified .tfvars file.
+      - name: Terraform Plan
+        id: plan
+        run: terraform plan -no-color -input=false -var-file="${{ env.TF_VAR_FILE }}" -out=tfplan
+        working-directory: ${{ env.TERRAFORM_WORKING_DIR }} # Set working directory if needed
+        # For pull requests, you might want to stop here or add a step to comment the plan on the PR.
+
+      # Step 8: Terraform Apply
+      # Applies the changes using the specified .tfvars file.
+      # This step will only run on pushes to the 'main' branch.
+      - name: Terraform Apply
+        # if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+        run: terraform apply -auto-approve -input=false -var-file="${{ env.TF_VAR_FILE }}" tfplan
+        working-directory: ${{ env.TERRAFORM_WORKING_DIR }} # Set working directory if needed
+
+      # Optional: Add a step for Terraform Destroy if needed, but be very careful with this.
+      # - name: Terraform Destroy
+      #   if: github.event_name == 'workflow_dispatch' && inputs.destroy == 'true' # Example: manual trigger with input
+      #   run: |
+      #     terraform workspace select ${{ env.TF_WORKSPACE }}
+      #     terraform destroy -auto-approve -var-file="${{ env.TF_VAR_FILE }}"
+      #   working-directory: ${{ env.TERRAFORM_WORKING_DIR }}
